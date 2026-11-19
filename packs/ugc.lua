@@ -1,30 +1,29 @@
 -- Vanta pack · Engine (PlaceId 73814454293317)
--- Every module registers through Module(); the hub builds the rows.
+-- Pedal pressing and upgrading. No vehicles.
 local CAT = "Engine"
+
+local PEDAL = { "pedal", "throttle", "gas", "rev", "push", "step", "press", "accelerate" }
+local UPGRADE = { "upgrade", "buy", "purchase", "improve", "level" }
 
 local function hrp()
     local ch = LP.Character
     return ch and ch:FindFirstChild("HumanoidRootPart")
 end
 
-local function seat()
-    local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
-    return h and h.SeatPart
-end
-
-local function vehicle()
-    local s = seat()
-    if s then
-        local m = s:FindFirstAncestorOfClass("Model")
-        if m then return m end
-    end
+local function nearest(names, radius)
     local h = hrp()
     if not h then return nil end
-    local best, bestD = nil, 45
+    local best, bestD = nil, radius or 60
     for _, d in ipairs(workspace:GetDescendants()) do
-        if d:IsA("VehicleSeat") then
-            local dist = (d.Position - h.Position).Magnitude
-            if dist < bestD then best, bestD = d:FindFirstAncestorOfClass("Model"), dist end
+        if d:IsA("BasePart") then
+            local n = d.Name:lower()
+            for _, p in ipairs(names) do
+                if n:find(p, 1, true) then
+                    local dist = (d.Position - h.Position).Magnitude
+                    if dist < bestD then best, bestD = d, dist end
+                    break
+                end
+            end
         end
     end
     return best
@@ -51,24 +50,98 @@ local function promptsNear(patterns, radius)
     return out
 end
 
-local function fire(prompt)
+local function clicksNear(patterns, radius)
+    local out = {}
+    local h = hrp()
+    if not h then return out end
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("ClickDetector") then
+            local part = d.Parent
+            if part and part:IsA("BasePart") and (part.Position - h.Position).Magnitude <= radius then
+                local n = part.Name:lower()
+                for _, p in ipairs(patterns) do
+                    if n:find(p, 1, true) then
+                        out[#out + 1] = d
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return out
+end
+
+local function firePrompt(p)
     if type(fireproximityprompt) == "function" then
-        pcall(fireproximityprompt, prompt)
+        pcall(fireproximityprompt, p)
     else
-        pcall(function() prompt:InputHoldBegin() end)
-        task.delay(0.12, function() pcall(function() prompt:InputHoldEnd() end) end)
+        pcall(function() p:InputHoldBegin() end)
+        task.delay(0.1, function() pcall(function() p:InputHoldEnd() end) end)
     end
 end
 
--- ── prompts ──────────────────────────────────────
+local function fireClick(cd)
+    if type(fireclickdetector) == "function" then
+        pcall(fireclickdetector, cd)
+    else
+        pcall(function() cd:FireClickDetector() end)
+    end
+end
+
+-- ── pedals ───────────────────────────────────────
 do
-    local AutoClaim = Module("Auto Claim", CAT, "grabs claim and reward prompts", nil, false)
-    function AutoClaim.Start()
-        AutoClaim:On(task.spawn(function()
-            while AutoClaim.Enabled do
-                for _, p in ipairs(promptsNear({ "claim", "collect", "reward", "pickup", "take" }, 45)) do
-                    fire(p)
+    local Pedal = Module("Auto Pedal", CAT, "fires every pedal in range", nil, false)
+    function Pedal.Start()
+        Pedal:On(task.spawn(function()
+            while Pedal.Enabled do
+                for _, p in ipairs(promptsNear(PEDAL, 40)) do firePrompt(p) end
+                for _, c in ipairs(clicksNear(PEDAL, 40)) do fireClick(c) end
+                task.wait(0.15)
+            end
+        end))
+    end
+end
+
+do
+    local Stand = Module("Stand on Pedal", CAT, "holds you on the pedal", nil, false)
+    function Stand.Start()
+        Stand:On(task.spawn(function()
+            while Stand.Enabled do
+                local part = nearest(PEDAL, 80)
+                local h = hrp()
+                if part and h then h.CFrame = part.CFrame + Vector3.new(0, 3, 0) end
+                task.wait(0.4)
+            end
+        end))
+    end
+end
+
+do
+    local Tap = Module("Fast Pedal", CAT, "10 pedal taps per second", nil, false)
+    function Tap.Start()
+        Tap:On(task.spawn(function()
+            while Tap.Enabled do
+                local part = nearest(PEDAL, 80)
+                if part then
+                    local h = hrp()
+                    if h then h.CFrame = part.CFrame + Vector3.new(0, 3, 0) end
+                    for _, c in ipairs(clicksNear(PEDAL, 40)) do fireClick(c) end
+                    for _, p in ipairs(promptsNear(PEDAL, 40)) do firePrompt(p) end
                 end
+                task.wait(0.1)
+            end
+        end))
+    end
+end
+
+-- ── upgrades ─────────────────────────────────────
+do
+    local Upgrade = Module("Auto Upgrade", CAT, "buys upgrades when affordable", nil, false)
+    function Upgrade.Start()
+        Upgrade:On(task.spawn(function()
+            while Upgrade.Enabled do
+                for _, p in ipairs(promptsNear(UPGRADE, 60)) do firePrompt(p) end
+                for _, c in ipairs(clicksNear(UPGRADE, 60)) do fireClick(c) end
                 task.wait(0.5)
             end
         end))
@@ -76,27 +149,25 @@ do
 end
 
 do
-    local AutoDyno = Module("Auto Dyno", CAT, "starts dyno runs for you", nil, false)
-    function AutoDyno.Start()
-        AutoDyno:On(task.spawn(function()
-            while AutoDyno.Enabled do
-                local found = promptsNear({ "dyno", "test", "run", "start" }, 30)
-                if #found > 0 then fire(found[1]) end
-                task.wait(2)
-            end
-        end))
+    local BuyAll = Module("Buy All", CAT, "one pass over every upgrade", nil, true, true)
+    function BuyAll.Start()
+        for _, p in ipairs(promptsNear(UPGRADE, 120)) do firePrompt(p) end
+        for _, c in ipairs(clicksNear(UPGRADE, 120)) do fireClick(c) end
+        Toast("fired every upgrade in range")
+        BuyAll:Stop()
+        task.delay(0.1, function() setVisual(BuyAll) end)
     end
 end
 
 do
-    local AutoSell = Module("Auto Sell", CAT, "fires sell and bank prompts", nil, false)
-    function AutoSell.Start()
-        AutoSell:On(task.spawn(function()
-            while AutoSell.Enabled do
-                for _, p in ipairs(promptsNear({ "sell", "cash out", "bank", "deposit" }, 45)) do
-                    fire(p)
+    local Claim = Module("Auto Claim", CAT, "claim and reward prompts", nil, false)
+    function Claim.Start()
+        Claim:On(task.spawn(function()
+            while Claim.Enabled do
+                for _, p in ipairs(promptsNear({ "claim", "collect", "reward", "pickup", "take" }, 60)) do
+                    firePrompt(p)
                 end
-                task.wait(1)
+                task.wait(0.6)
             end
         end))
     end
@@ -107,10 +178,8 @@ do
     function Spam.Start()
         Spam:On(task.spawn(function()
             while Spam.Enabled do
-                for _, p in ipairs(promptsNear({ "" }, 25)) do
-                    fire(p)
-                end
-                task.wait(0.35)
+                for _, p in ipairs(promptsNear({ "" }, 30)) do firePrompt(p) end
+                task.wait(0.3)
             end
         end))
     end
@@ -118,24 +187,24 @@ end
 
 -- ── visuals ──────────────────────────────────────
 makeItemESP({
-    name = "Car ESP", cat = CAT, desc = "outlines nearby vehicles", paid = true,
-    roots = { "workspace" }, cap = 120, interval = 1,
-    patterns = { "car", "vehicle", "chassis", "body" },
+    name = "Pedal ESP", cat = CAT, desc = "outlines pedals and stations", paid = true,
+    roots = { "workspace" }, cap = 150, interval = 1,
+    patterns = PEDAL,
     color = Color3.fromRGB(126, 92, 255),
 })
 
 makeItemESP({
-    name = "Cash ESP", cat = CAT, desc = "dropped cash and pickups", paid = true,
-    roots = { "workspace" }, cap = 200, interval = 0.6,
-    patterns = { "cash", "money", "coin", "drop", "gem" },
+    name = "Upgrade ESP", cat = CAT, desc = "outlines upgrade stations", paid = true,
+    roots = { "workspace" }, cap = 150, interval = 1,
+    patterns = UPGRADE,
     color = Color3.fromRGB(74, 222, 128),
 })
 
 do
-    local DynoHUD = Module("Dyno HUD", CAT, "car speed, health and gear", nil, false)
-    function DynoHUD.Start()
+    local HUD = Module("Money HUD", CAT, "cash, speed and RPM", nil, false)
+    function HUD.Start()
         local box = Instance.new("TextLabel")
-        box.Size = UDim2.fromOffset(180, 52)
+        box.Size = UDim2.fromOffset(180, 50)
         box.Position = UDim2.fromOffset(18, 66)
         box.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
         box.BackgroundTransparency = 0.2
@@ -152,115 +221,40 @@ do
         pad.PaddingLeft = UDim.new(0, 8)
         pad.PaddingTop = UDim.new(0, 6)
         pad.Parent = box
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = box
-        DynoHUD:Keep(box)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, 6)
+        c.Parent = box
+        HUD:Keep(box)
 
-        DynoHUD:On(RunService.Heartbeat:Connect(function()
-            local v = vehicle()
-            local part = v and v.PrimaryPart
-            local speed = 0
-            if part then speed = math.floor(part.AssemblyLinearVelocity.Magnitude + 0.5) end
-            local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
-            box.Text = ("speed  %d\nhealth %d\ncar    %s"):format(
-                speed, h and math.floor(h.Health) or 0, v and v.Name:sub(1, 18) or "none")
-        end))
-    end
-end
-
--- ── vehicle ──────────────────────────────────────
-do
-    local Tune = Module("Max Tune", CAT, "pushes tune values to max", nil, false)
-    local SKIP = { "ratio", "gear", "weight", "mass" }
-    local HIT = { "speed", "torque", "power", "boost", "rpm", "hp", "accel" }
-    function Tune.Start()
-        Tune:On(task.spawn(function()
-            while Tune.Enabled do
-                local v = vehicle()
-                if v then
-                    for _, d in ipairs(v:GetDescendants()) do
-                        if d:IsA("NumberValue") or d:IsA("IntValue") then
-                            local n = d.Name:lower()
-                            local skip = false
-                            for _, s in ipairs(SKIP) do
-                                if n:find(s, 1, true) then skip = true break end
-                            end
-                            if not skip then
-                                for _, s in ipairs(HIT) do
-                                    if n:find(s, 1, true) then
-                                        pcall(function() d.Value = 9999 end)
-                                        break
-                                    end
-                                end
-                            end
-                        end
+        HUD:On(RunService.Heartbeat:Connect(function()
+            local money, speed = 0, 0
+            local ls = LP:FindFirstChild("leaderstats")
+            if ls then
+                for _, v in ipairs(ls:GetChildren()) do
+                    if v:IsA("IntValue") or v:IsA("NumberValue") then
+                        money = math.max(money, v.Value)
                     end
                 end
-                task.wait(1)
             end
+            local h = hrp()
+            if h then speed = math.floor(h.AssemblyLinearVelocity.Magnitude + 0.5) end
+            box.Text = ("cash   %d\nspeed  %d"):format(math.floor(money), speed)
         end))
     end
 end
 
 do
-    local Turbo = Module("Turbo", CAT, "raises the seat speed cap", nil, false)
-    function Turbo.Start()
-        local s = seat()
-        if not s then return false end
-        local old = s.MaxSpeed
-        pcall(function() s.MaxSpeed = 500 end)
-        Turbo:Cleanup(function()
-            if s.Parent then pcall(function() s.MaxSpeed = old end) end
-        end)
-    end
-end
-
-do
-    local AntiFlip = Module("Anti Flip", CAT, "keeps the car level", nil, false)
-    function AntiFlip.Start()
-        AntiFlip:On(RunService.Heartbeat:Connect(function()
-            local v = vehicle()
-            local p = v and v.PrimaryPart
-            if not p then return end
-            local _, yaw = p.CFrame:ToEulerAnglesYXZ()
-            p.CFrame = CFrame.new(p.CFrame.Position) * CFrame.Angles(0, yaw, 0)
-        end))
-    end
-end
-
-do
-    local TPDealer = Module("TP to Dealer", CAT, "jumps you to the showroom", nil, true, true)
-    function TPDealer.Start()
+    local Go = Module("TP to Pedal", CAT, "jumps you onto the nearest pedal", nil, true, true)
+    function Go.Start()
+        local part = nearest(PEDAL, 300)
         local h = hrp()
-        if not h then return false end
-        local best, bestD = nil, math.huge
-        for _, d in ipairs(workspace:GetDescendants()) do
-            if d:IsA("BasePart") then
-                local n = d.Name:lower()
-                if n:find("dealer", 1, true) or n:find("showroom", 1, true) or n:find("shop", 1, true) then
-                    local dist = (d.Position - h.Position).Magnitude
-                    if dist < bestD then best, bestD = d, dist end
-                end
-            end
-        end
-        if not best then
-            Toast("no dealer found")
+        if part and h then
+            h.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+            Toast("moved to " .. part.Name:sub(1, 20))
         else
-            h.CFrame = best.CFrame + Vector3.new(0, 6, 0)
-            Toast("moved to " .. best.Name:sub(1, 20))
+            Toast("no pedal found")
         end
-        TPDealer:Stop()
-        task.delay(0.1, function() setVisual(TPDealer) end)
-    end
-end
-
-do
-    local Exit = Module("Eject", CAT, "hops you out of the car", nil, false, true)
-    function Exit.Start()
-        local s = seat()
-        if s then pcall(function() s:Sit(nil) end) end
-        Exit:Stop()
-        task.delay(0.1, function() setVisual(Exit) end)
+        Go:Stop()
+        task.delay(0.1, function() setVisual(Go) end)
     end
 end
