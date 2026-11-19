@@ -1,17 +1,28 @@
 -- Vanta pack · Engine (PlaceId 73814454293317)
--- The game is all PlayerGui buttons: no prompts, no click detectors.
+-- All PlayerGui buttons. Clicks route through PlayerGui and hold properly.
 local CAT = "Engine"
-local VIM = game:GetService("VirtualInputManager")
+local okVim, VIM = pcall(game.GetService, game, "VirtualInputManager")
+if not okVim then VIM = nil end
 local GuiService = game:GetService("GuiService")
 
+local function pgui()
+    return LP:FindFirstChild("PlayerGui")
+end
+
 local function guiRoot()
-    local pg = LP:FindFirstChild("PlayerGui")
-    return pg and pg:FindFirstChild("ScreenGui")
+    local p = pgui()
+    return p and p:FindFirstChild("ScreenGui")
 end
 
 local function main()
     local g = guiRoot()
     return g and g:FindFirstChild("Main")
+end
+
+local function panel(name)
+    local g = guiRoot()
+    local frames = g and g:FindFirstChild("Frames")
+    return frames and frames:FindFirstChild(name)
 end
 
 local function childByPrefix(parent, prefix)
@@ -32,15 +43,10 @@ local function shown(o)
     return false
 end
 
-local function buttonFor(text, root)
-    for _, d in ipairs((root or guiRoot()):GetDescendants()) do
-        if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text == text and shown(d) then
-            if d:IsA("TextButton") then return d end
-            local b = d:FindFirstAncestorOfClass("TextButton")
-            if b then return b end
-        end
-    end
-    return nil
+-- "$1,250" -> 1250. The parentheses keep gsub's second return value (the
+-- replacement count) out of tonumber, where it would be read as the base.
+local function money(text)
+    return tonumber((text:gsub("[^%d]", "")))
 end
 
 local function centre(btn)
@@ -53,75 +59,135 @@ local function centre(btn)
     return c
 end
 
-local function click(btn)
+-- hide the hub if it covers the point, press for `hold` seconds, restore.
+-- returns ok plus the object that was actually under the cursor.
+local function click(btn, hold)
+    if not VIM then return false end
     if not btn or not btn:IsDescendantOf(game) or not shown(btn) then return false end
+    local p = pgui()
+    if not p then return false end
     local c = centre(btn)
-    local p, s = frame.AbsolutePosition, frame.AbsoluteSize
-    local covered = frame.Visible and c.X >= p.X and c.X <= p.X + s.X
-        and c.Y >= p.Y and c.Y <= p.Y + s.Y
-    if covered then frame.Visible = false end
-    task.wait(covered and 0.04 or 0)
-    pcall(function() VIM:SendMouseMoveEvent(c.X, c.Y, game) end)
-    pcall(function() VIM:SendMouseButtonEvent(c.X, c.Y, 0, true, game, 0) end)
+
+    local fp, fs = frame.AbsolutePosition, frame.AbsoluteSize
+    local covered = frame.Visible and c.X >= fp.X and c.X <= fp.X + fs.X
+        and c.Y >= fp.Y and c.Y <= fp.Y + fs.Y
+    if covered then
+        frame.Visible = false
+        task.wait(0.06)
+    end
+
+    local target = btn
+    local ok, objs = pcall(function() return p:GetGuiObjectsAtPosition(c.X, c.Y) end)
+    if ok and type(objs) == "table" then
+        for _, o in ipairs(objs) do
+            if not o:IsDescendantOf(gui) then
+                local b = o:IsA("TextButton") and o or o:FindFirstAncestorOfClass("TextButton")
+                if b then target = b end
+                break
+            end
+        end
+    end
+
+    pcall(function() VIM:SendMouseMoveEvent(c.X, c.Y, p) end)
     task.wait(0.02)
-    pcall(function() VIM:SendMouseButtonEvent(c.X, c.Y, 0, false, game, 0) end)
+    pcall(function() VIM:SendMouseButtonEvent(c.X, c.Y, 0, true, p, 0) end)
+    task.wait(hold or 0.12)
+    pcall(function() VIM:SendMouseButtonEvent(c.X, c.Y, 0, false, p, 0) end)
+
     if covered then
         task.wait(0.05)
         frame.Visible = true
     end
-    return true
+    return true, target
 end
 
 local function cash()
     local ls = LP:FindFirstChild("leaderstats")
     local v = ls and ls:FindFirstChild("Cash")
-    return v and v.Value or 0
+    return v and tonumber(v.Value) or 0
 end
 
-local function openPanel(prefix)
+-- opens a left-bar tab, unless its panel is already on screen: clicking a tab
+-- that is already open can close it again
+local function openPanel(prefix, name)
+    local p = name and panel(name)
+    if p and shown(p) then return end
     local left = main() and main():FindFirstChild("Left")
     local b = childByPrefix(left, prefix)
     if b then click(b) end
+end
+
+-- repeats step every `every` seconds while the module is on. task.defer, not
+-- task.spawn: a spawned loop runs before Start returns, while Enabled can still
+-- be false, and would exit on its first check. Errors in one pass don't end it.
+local function loop(m, every, step)
+    task.defer(function()
+        while m.Enabled do
+            local ok, err = pcall(step)
+            if not ok then warn(("[Vanta] %s: %s"):format(m.Name, tostring(err))) end
+            task.wait(every)
+        end
+    end)
+end
+
+-- one-shot modules: switch off once the hub has finished switching them on,
+-- then repaint the row
+local function done(m)
+    task.defer(function()
+        if m.Enabled then m:Stop() end
+        if setVisual then pcall(setVisual, m) end
+    end)
+end
+
+do
+    local Test = Module("Click Test", CAT, "reports what a click hits", nil, false, true)
+    function Test.Start()
+        done(Test)
+        local m = main()
+        local right = m and m:FindFirstChild("Right")
+        local b = childByPrefix(right, "Engine")
+        if not b then
+            Toast("engine button not found")
+            return
+        end
+        local ok, target = click(b, 0.2)
+        Toast(ok and ("hit " .. target.Name) or "click failed")
+    end
 end
 
 -- ── engine ───────────────────────────────────────
 do
     local Start = Module("Auto Start Engine", CAT, "presses Start Engine", nil, false)
     function Start.Start()
-        Start:On(task.spawn(function()
-            while Start.Enabled do
-                local right = main() and main():FindFirstChild("Right")
-                local b = childByPrefix(right, "Engine")
-                if b then click(b) end
-                task.wait(2.5)
-            end
-        end))
+        loop(Start, 2.5, function()
+            local right = main() and main():FindFirstChild("Right")
+            local b = childByPrefix(right, "Engine")
+            if b then click(b, 0.2) end
+        end)
     end
 end
 
 do
     local Dyno = Module("Auto Dyno", CAT, "presses Run Dyno", nil, false)
     function Dyno.Start()
-        Dyno:On(task.spawn(function()
-            while Dyno.Enabled do
-                local right = main() and main():FindFirstChild("Right")
-                local b = childByPrefix(right, "Dyno")
-                if b then click(b) end
-                task.wait(4)
-            end
-        end))
+        loop(Dyno, 4, function()
+            local right = main() and main():FindFirstChild("Right")
+            local b = childByPrefix(right, "Dyno")
+            if b then click(b, 0.2) end
+        end)
     end
 end
 
 do
     local Throttle = Module("Hold Throttle", CAT, "holds W while on", nil, false)
     function Throttle.Start()
+        if not VIM then return false end
         local function send(down)
-            if not VIM then return end
             pcall(function() VIM:SendKeyEvent(down, Enum.KeyCode.W, false, game) end)
         end
-        task.wait(0.2)
-        send(true)
+        task.delay(0.2, function()
+            if Throttle.Enabled then send(true) end
+        end)
         Throttle:Cleanup(function() send(false) end)
     end
 end
@@ -130,43 +196,34 @@ end
 do
     local Up = Module("Shift Up", CAT, "presses + repeatedly", nil, false)
     function Up.Start()
-        Up:On(task.spawn(function()
-            while Up.Enabled do
-                local pedals = main() and main():FindFirstChild("Pedals")
-                local b = pedals and childByPrefix(pedals, "Shift")
-                if b then click(b) end
-                task.wait(1.2)
-            end
-        end))
+        loop(Up, 1.2, function()
+            local pedals = main() and main():FindFirstChild("Pedals")
+            local b = pedals and childByPrefix(pedals, "Shift")
+            if b then click(b, 0.4) end
+        end)
     end
 end
 
 do
     local Down = Module("Shift Down", CAT, "presses - repeatedly", nil, false)
     function Down.Start()
-        Down:On(task.spawn(function()
-            while Down.Enabled do
-                local pedals = main() and main():FindFirstChild("Pedals")
-                local b = pedals and childByPrefix(pedals, "DownShift")
-                if b then click(b) end
-                task.wait(1.2)
-            end
-        end))
+        loop(Down, 1.2, function()
+            local pedals = main() and main():FindFirstChild("Pedals")
+            local b = pedals and childByPrefix(pedals, "DownShift")
+            if b then click(b, 0.4) end
+        end)
     end
 end
 
 -- ── buying ───────────────────────────────────────
 do
-    local Equip = Module("Equip Best Engine", CAT, "buys the best one you can afford", nil, true)
+    local Equip = Module("Equip Best Engine", CAT, "buys the best one you can afford", nil, true, true)
     function Equip.Start()
-        Equip:Stop()
-        task.delay(0.1, function() setVisual(Equip) end)
+        done(Equip)
         task.spawn(function()
-            openPanel("03")
+            openPanel("03", "Engines")
             task.wait(0.6)
-            local g = guiRoot()
-            local frames = g and g:FindFirstChild("Frames")
-            local box = frames and frames:FindFirstChild("Engines")
+            local box = panel("Engines")
             local list = box and box:FindFirstChild("Content")
             list = list and list:FindFirstChild("List")
             if not list then Toast("engines panel not found") return end
@@ -180,7 +237,7 @@ do
                             if d.Text == "Equip" then
                                 equipBtn = d:FindFirstAncestorOfClass("TextButton")
                             elseif d.Text:sub(1, 1) == "$" then
-                                price = tonumber(d.Text:gsub("[^%d]", ""))
+                                price = money(d.Text)
                             end
                         end
                     end
@@ -190,7 +247,7 @@ do
                 end
             end
             if not best then Toast("nothing affordable") return end
-            click(best)
+            click(best, 0.15)
             Toast(("equipped · $%d"):format(bestPrice))
         end)
     end
@@ -199,54 +256,40 @@ end
 do
     local Buy = Module("Auto Upgrade", CAT, "buys upgrades you can afford", nil, false)
     function Buy.Start()
-        Buy:On(task.spawn(function()
-            while Buy.Enabled do
-                openPanel("04")
-                task.wait(0.5)
-                local g = guiRoot()
-                local frames = g and g:FindFirstChild("Frames")
-                local box = frames and frames:FindFirstChild("Upgrades")
-                if box then
-                    for _, d in ipairs(box:GetDescendants()) do
-                        if d:IsA("TextLabel") and shown(d) then
-                            local t = d.Text
-                            if t:sub(1, 1) == "$" then
-                                local price = tonumber(t:gsub("[^%d]", ""))
-                                if price and price <= cash() then
-                                    local b = d:FindFirstAncestorOfClass("TextButton")
-                                    if b then click(b) end
-                                end
-                            end
-                        end
+        loop(Buy, 1.5, function()
+            openPanel("04", "Upgrades")
+            task.wait(0.5)
+            local box = panel("Upgrades")
+            if not box then return end
+            for _, d in ipairs(box:GetDescendants()) do
+                if not Buy.Enabled then return end
+                if d:IsA("TextLabel") and shown(d) and d.Text:sub(1, 1) == "$" then
+                    local price = money(d.Text)
+                    if price and price <= cash() then
+                        local b = d:FindFirstAncestorOfClass("TextButton")
+                        if b then click(b, 0.12) end
                     end
                 end
-                task.wait(1.5)
             end
-        end))
+        end)
     end
 end
 
 do
     local Nitro = Module("Auto Nitro", CAT, "presses Nitrous", nil, false)
     function Nitro.Start()
-        Nitro:On(task.spawn(function()
-            while Nitro.Enabled do
-                openPanel("06")
-                task.wait(0.8)
-                local g = guiRoot()
-                local frames = g and g:FindFirstChild("Frames")
-                local box = frames and frames:FindFirstChild("Nitro")
-                if box then
-                    for _, d in ipairs(box:GetDescendants()) do
-                        if d:IsA("TextLabel") and shown(d) and d.Text ~= "X" then
-                            local b = d:FindFirstAncestorOfClass("TextButton")
-                            if b then click(b) break end
-                        end
-                    end
+        loop(Nitro, 2, function()
+            openPanel("06", "Nitro")
+            task.wait(0.8)
+            local box = panel("Nitro")
+            if not box then return end
+            for _, d in ipairs(box:GetDescendants()) do
+                if d:IsA("TextLabel") and shown(d) and d.Text ~= "X" then
+                    local b = d:FindFirstAncestorOfClass("TextButton")
+                    if b then click(b, 0.15) break end
                 end
-                task.wait(2)
             end
-        end))
+        end)
     end
 end
 
@@ -283,7 +326,7 @@ do
             local stats = right and right:FindFirstChild("Stats")
             if stats then
                 for _, d in ipairs(stats:GetDescendants()) do
-                    if d:IsA("TextLabel") and tonumber(d.Text) then
+                    if d:IsA("TextLabel") then
                         local v = tonumber(d.Text)
                         if v and v > speed then speed = v end
                     end
@@ -297,8 +340,7 @@ end
 do
     local Menu = Module("Open Upgrades", CAT, "jumps straight to the shop tab", nil, false, true)
     function Menu.Start()
-        openPanel("04")
-        Menu:Stop()
-        task.delay(0.1, function() setVisual(Menu) end)
+        done(Menu)
+        task.spawn(openPanel, "04", "Upgrades")
     end
 end
