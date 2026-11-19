@@ -22,28 +22,39 @@ local function fire(btn)
     pcall(function() VIM:SendMouseButtonEvent(p.X, p.Y, 0, false, game, 0) end)
 end
 
--- claims every finished upgrade quest. Unfinished ones are fired too; the
--- server rejects those, so it costs nothing and never misses a completion.
+-- claims completed upgrade quests. Each quest is fired once per completion and
+-- re-armed if it resets, so nothing spams and nothing is missed.
 local Claim = Module("Auto Claim", "Ugc", "claims finished upgrade quests", nil, true)
 function Claim.Start()
-    local on = true
+    local list = path("Frames", "Upgrades", "Content", "List")
+    if not list then
+        Toast("upgrades panel not found")
+        return false
+    end
+    local quests = #list:GetChildren()
+    Toast(("watching %d quests"):format(quests))
+
+    local armed, on = {}, true
     task.spawn(function()
         while on do
-            local list = path("Frames", "Upgrades", "Content", "List")
-            if list then
-                for _, quest in ipairs(list:GetChildren()) do
+            local holder = path("Frames", "Upgrades", "Content", "List")
+            if holder then
+                for _, quest in ipairs(holder:GetChildren()) do
                     local claim = quest:FindFirstChild("Claim")
-                    if claim and claim:IsA("GuiButton") then
-                        local prog = quest:FindFirstChild("ProgressText")
-                        local done, total = (prog and prog.Text or ""):match("(%d+)%s*/%s*(%d+)")
-                        if not done or done == total then
-                            fire(claim)
-                            task.wait(0.09)
-                        end
+                    local prog = quest:FindFirstChild("ProgressText")
+                    local done, total = (prog and prog.Text or ""):match("(%d+)%s*/%s*(%d+)")
+                    local complete = done and total and done == total
+                    if complete and not armed[quest] then
+                        armed[quest] = true
+                        fire(claim)
+                        Toast("claimed · " .. quest.Name)
+                        task.wait(0.12)
+                    elseif not complete then
+                        armed[quest] = nil
                     end
                 end
             end
-            task.wait(1.5)
+            task.wait(1.2)
         end
     end)
     Claim:Cleanup(function() on = false end)
@@ -51,16 +62,22 @@ end
 
 local Dyno = Module("Auto Dyno", "Ugc", "repeats dyno runs", nil, true)
 function Dyno.Start()
+    local engine = path("ScreenGui", "Main", "Right", "EngineButton")
+    local dyno = path("ScreenGui", "Main", "Right", "DynoButton")
+    if not dyno then
+        Toast("dyno button not found")
+        return false
+    end
+    Toast(engine and "dyno ready" or "dyno ready · no engine button")
+
     local on = true
     task.spawn(function()
         while on do
-            local engine = path("Main", "Right", "EngineButton")
-            local dyno = path("Main", "Right", "DynoButton")
             local lbl = engine and engine:FindFirstChild("Content")
             lbl = lbl and lbl:FindFirstChild("Label")
             if lbl and lbl.Text:find("Start") then
                 fire(engine)
-                task.wait(0.6)
+                task.wait(0.7)
             end
             fire(dyno)
             task.wait(4)
@@ -69,10 +86,16 @@ function Dyno.Start()
     Dyno:Cleanup(function() on = false end)
 end
 
--- mirrors the live stat labels into a corner overlay
 local HUD = Module("Stat HUD", "Ugc", "speed, gear, power, temp overlay", nil, true)
 function HUD.Start()
     if not Drawing then return false end
+    local stats = path("ScreenGui", "Main", "Right", "Stats")
+    if not stats then
+        Toast("stats panel not found")
+        return false
+    end
+    Toast("hud attached")
+
     local lines = {}
     for i = 1, 4 do
         lines[i] = espDraw("Text", { Size = 14, Outline = true, Center = false,
@@ -81,7 +104,7 @@ function HUD.Start()
     end
 
     local function readStat(stat)
-        local holder = path("Main", "Right", "Stats", stat)
+        local holder = stats:FindFirstChild(stat)
         if not holder then return "—" end
         for _, l in ipairs(holder:GetChildren()) do
             if l:IsA("TextLabel") and l.Text ~= "" and l.Text ~= stat then
@@ -108,6 +131,3 @@ function HUD.Start()
         for _, l in ipairs(lines) do pcall(function() l:Remove() end) end
     end)
 end
-
-
-
